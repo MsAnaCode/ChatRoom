@@ -49,7 +49,7 @@ O sistema foi estruturado seguindo os princípios de separação de responsabili
 │   ├── hooks/                  # Hooks customizados (useRooms, useMessages, usePresence, useTypingIndicator)
 │   ├── services/               # Clientes e chamadas de API do Supabase
 │   ├── schemas/                # Schemas de validação Zod
-│   ├── theme/                  # Design tokens (cores, tipografia, espaçamentos)
+│   ├── theme/                  # Design tokens (cores, espaçamentos, raios)
 │   ├── types/                  # Definições de tipos TypeScript do domínio
 │   └── utils/                  # Funções puras (agrupamento de balões, avatar, formatação)
 ├── supabase/
@@ -102,7 +102,44 @@ Todas as tabelas possuem RLS habilitado:
 
 ---
 
-## 5. Garantia da Qualidade e Testes Automatizados
+## 5. Registro de Problemas Encontrados e Soluções Adotadas (Troubleshooting)
+
+Durante as etapas de implantação, configuração do backend e homologação do aplicativo, foram identificados e solucionados os seguintes desafios técnicos:
+
+### Problema 1: Erro de Validação de E-mail no Cadastro
+- **Descrição do Erro:** Ao registrar um novo usuário, o aplicativo alertava sobre a necessidade de confirmar o e-mail, porém o link de redirecionamento falhava ou o usuário ficava bloqueado sem conseguir logar.
+- **Causa Raiz:** Por padrão, o Supabase Auth vem com a opção de confirmação de e-mail ativada (`Confirm email: true`) apontando para URLs locais web (`http://localhost:3000`), as quais não abrem nativamente no app móvel sem esquema de *Deep Linking* pré-configurado.
+- **Solução Implementada:** 
+  1. No painel do Supabase, acessou-se **Authentication → Providers → Email** e desativou-se a opção **"Confirm email"** para o ambiente de desenvolvimento.
+  2. Para o usuário já criado e bloqueado, utilizou-se a ação manual de **"Confirm Email"** diretamente no painel **Authentication → Users**.
+
+### Problema 2: Ausência das Tabelas no Schema Cache
+- **Descrição do Erro:** `Could not find the table 'public.rooms' in the schema cache`.
+- **Causa Raiz:** O cliente mobile tentou consumir a API REST/Realtime do Supabase, mas o esquema de banco de dados (`supabase/schema.sql`) ainda não havia sido executado no PostgreSQL do projeto remoto, resultando na ausência das tabelas públicas.
+- **Solução Implementada:**
+  1. Acessou-se a ferramenta **SQL Editor** no painel do Supabase.
+  2. Executou-se na íntegra o script DDL `supabase/schema.sql`, criando as tabelas (`profiles`, `rooms`, `room_members`, `messages`), as funções PL/pgSQL, as permissões e as políticas de RLS.
+  3. No aviso de segurança do Supabase (*"Potential issue detected: This query includes destructive operations"*), confirmou-se via **Run query**, pois o script contém instruções defensivas seguras (`drop trigger if exists`, `cascade`).
+
+### Problema 3: Violação de Chave Estrangeira ao Criar Salas
+- **Descrição do Erro:** `insert or update on table "rooms" violates foreign key constraint "rooms_created_by_fkey"`.
+- **Causa Raiz:** O usuário de teste foi criado no `auth.users` antes da execução do script `schema.sql`. Como o *trigger* `handle_new_user` ainda não existia no momento em que a conta foi registrada, a linha correspondente na tabela `public.profiles` não foi gerada. Ao tentar criar uma sala, a coluna `created_by` (que possui chave estrangeira apontando para `profiles.id`) falhou por integridade referencial.
+- **Solução Implementada:**
+  1. Executou-se uma rotina de sincronização e migração retroativa via SQL Editor:
+     ```sql
+     insert into public.profiles (id, username, avatar_color)
+     select 
+       id, 
+       coalesce(nullif(trim(raw_user_meta_data ->> 'full_name'), ''), split_part(email, '@', 1)), 
+       '#2563EB'
+     from auth.users
+     on conflict (id) do nothing;
+     ```
+  2. A partir dessa execução, o perfil existente foi devidamente populado e os próximos usuários passaram a ser criados automaticamente pelo gatilho ativo.
+
+---
+
+## 6. Garantia da Qualidade e Testes Automatizados
 
 O projeto conta com **100% de aprovação** na suíte completa de testes automatizados:
 
@@ -123,6 +160,6 @@ Tests:       12 passed, 12 total
 
 ---
 
-## 6. Conclusão
+## 7. Conclusão
 
-O aplicativo **ChatRoom** atendeu a todos os requisitos funcionais e não funcionais propostos para a disciplina de Programação para Dispositivos Móveis. Demonstrou a viabilidade de uma arquitetura limpa e reativa, unindo a velocidade de desenvolvimento do ecossistema Expo/React Native à robustez e escalabilidade do Supabase para serviços em tempo real.
+O aplicativo **ChatRoom** atendeu a todos os requisitos funcionais e não funcionais propostos para a disciplina de Programação para Dispositivos Móveis. Demonstrou a viabilidade de uma arquitetura limpa e reativa, unindo a velocidade de desenvolvimento do ecossistema Expo/React Native à robustez e escalabilidade do Supabase para serviços em tempo real. Os incidentes observados durante a integração foram devidamente diagnosticados, documentados e sanados, servindo de base para o amadurecimento técnico do projeto.
